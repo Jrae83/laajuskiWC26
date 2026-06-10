@@ -573,6 +573,8 @@ html{scroll-padding-top:108px}
     <input class="inp" id="name-inp" type="text" placeholder="Kirjoita nimesi..." maxlength="32" autocomplete="off">
     <button class="btn" onclick="doLogin()">Aloita veikkaaminen →</button>
     <button onclick="closeLogin()" style="width:100%;margin-top:8px;padding:10px;background:none;border:1.5px solid var(--border2);border-radius:var(--r);font-size:13px;font-weight:500;color:var(--t2);cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s;" onmouseover="this.style.borderColor='var(--navy)';this.style.color='var(--navy)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--t2)'">Selaa sivustoa →</button>
+    <button onclick="clearLocalData()" style="width:100%;margin-top:6px;padding:8px;background:none;border:1px solid var(--border);border-radius:var(--r);font-size:11px;font-weight:500;color:var(--t3);cursor:pointer;font-family:'Inter',sans-serif;">🗑 Tyhjennä selaimen data (ongelmatilanne)</button>
+    <button onclick="clearLocalData()" style="width:100%;margin-top:6px;padding:8px;background:none;border:1px solid #fca5a5;border-radius:var(--r);font-size:12px;font-weight:500;color:#b91c1c;cursor:pointer;font-family:'Inter',sans-serif;">🗑 Tyhjennä selaimen välimuisti</button>
     <div class="scoring-rows">
       <h4>Pisteytys</h4>
       <div class="sr"><span>Tarkka tulos</span><span class="sr-pts">5 pts</span></div>
@@ -677,6 +679,7 @@ html{scroll-padding-top:108px}
       <span class="sec-title">⚙ Admin</span>
       <div class="sec-line"></div>
       <button style="font-size:12px;font-weight:600;padding:4px 12px;background:var(--navy);color:#fff;border:none;border-radius:6px;cursor:pointer" onclick="saveResults()">💾 Tallenna palvelimelle</button>
+      <button style="font-size:12px;font-weight:600;padding:4px 10px;background:#fee2e2;color:var(--red);border:1px solid #fca5a5;border-radius:6px;cursor:pointer;margin-left:6px;" onclick="logoutAdmin()">🔒 Kirjaudu ulos</button>
     </div>
     <div id="admin-wrap"></div>
   </section>
@@ -981,6 +984,20 @@ function openLogin() {
   document.getElementById('overlay').classList.remove('hidden');
   setTimeout(() => document.getElementById('name-inp').focus(), 80);
 }
+function clearLocalData() {
+  if (!confirm('Tämä poistaa kaikki tämän laitteen väliaikaiset veikkaustiedot. Et menetä muiden pelaajien dataa. Jatketaanko?')) return;
+  localStorage.clear();
+  sessionStorage.clear();
+  location.reload();
+}
+
+function clearLocalData() {
+  if (!confirm('Tämä tyhjentää tämän laitteen/selaimen tallentaman datan. Palvelimella oleva data säilyy. Jatketaanko?')) return;
+  localStorage.clear();
+  sessionStorage.clear();
+  location.reload();
+}
+
 function closeLogin() { document.getElementById('overlay').classList.add('hidden'); }
 
 function loginAs(name) {
@@ -1018,17 +1035,41 @@ function setLoggedIn(name) {
 
 // ── ADMIN GATE ────────────────────────────────────
 const ADMIN_SESSION_KEY = 'wc26_admin_ok';
+const ADMIN_TIMEOUT_KEY = 'wc26_admin_exp';
+const ADMIN_TIMEOUT_MS  = 30 * 60 * 1000; // 30 minuuttia
+let adminTimeoutTimer = null;
+
+function resetAdminTimeout() {
+  clearTimeout(adminTimeoutTimer);
+  sessionStorage.setItem(ADMIN_TIMEOUT_KEY, Date.now() + ADMIN_TIMEOUT_MS);
+  adminTimeoutTimer = setTimeout(logoutAdmin, ADMIN_TIMEOUT_MS);
+}
+
+function logoutAdmin() {
+  sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  sessionStorage.removeItem(ADMIN_TIMEOUT_KEY);
+  document.getElementById('sec-admin').style.display = 'none';
+  document.getElementById('admin-gate').style.display = 'none';
+  document.getElementById('admin-pin-inp').value = '';
+  document.getElementById('admin-pin-err').style.display = 'none';
+  toast('🔒 Admin-sessio vanhentunut — kirjaudu uudelleen', 4000);
+}
 
 function openAdminGate(e) {
   if (e) e.preventDefault();
   const sec  = document.getElementById('sec-admin');
   const gate = document.getElementById('admin-gate');
-  if (sessionStorage.getItem(ADMIN_SESSION_KEY)) {
+  // Tarkista sessio ja timeout
+  const exp = parseInt(sessionStorage.getItem(ADMIN_TIMEOUT_KEY) || '0');
+  if (sessionStorage.getItem(ADMIN_SESSION_KEY) && Date.now() < exp) {
+    resetAdminTimeout();
     sec.style.display = 'block'; gate.style.display = 'none';
     renderAdmin();
     setTimeout(() => sec.scrollIntoView({behavior:'smooth'}), 50);
     return;
   }
+  // Sessio vanhentunut tai ei ole — näytä PIN-portti
+  sessionStorage.removeItem(ADMIN_SESSION_KEY);
   sec.style.display = 'none'; gate.style.display = 'block';
   setTimeout(() => {
     gate.scrollIntoView({behavior:'smooth'});
@@ -1051,6 +1092,7 @@ function checkAdminPin() {
 
 function unlockAdmin() {
   sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
+  resetAdminTimeout();
   document.getElementById('admin-gate').style.display = 'none';
   const sec = document.getElementById('sec-admin');
   sec.style.display = 'block'; renderAdmin();
@@ -1562,6 +1604,7 @@ function deletePlayer(name) {
 }
 
 function aGroup(g, i, pos, val) {
+  resetAdminTimeout();
   if (!adminData.groupResults[g]) adminData.groupResults[g] = {};
   if (!adminData.groupResults[g][i]) adminData.groupResults[g][i] = [null,null];
   adminData.groupResults[g][i][pos] = parseInt(val)||0;
