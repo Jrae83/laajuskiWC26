@@ -510,6 +510,43 @@ html{scroll-padding-top:108px}
   /* Modal */
   .modal{padding:20px 16px}
 }
+/* ── COMMENTARY ── */
+.commentary-card {
+  background: linear-gradient(135deg, #0f1f3d 0%, #1a3a6e 100%);
+  border-radius: var(--r2); padding: 28px 32px;
+  color: white; position: relative; overflow: hidden;
+  box-shadow: var(--sh2);
+}
+.commentary-card::before {
+  content: '🎙'; position: absolute; right: 24px; top: 20px;
+  font-size: 48px; opacity: .15;
+}
+.commentary-updated {
+  font-size: 11px; color: rgba(255,255,255,.4);
+  margin-bottom: 16px; letter-spacing: .5px;
+}
+.commentary-text {
+  font-size: 16px; line-height: 1.8; color: rgba(255,255,255,.9);
+  white-space: pre-wrap;
+}
+.commentary-text strong { color: #f59e0b; }
+.commentary-loading {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px; color: rgba(255,255,255,.6); padding: 8px 0;
+}
+.commentary-spinner {
+  width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.2);
+  border-top-color: #f59e0b; border-radius: 50%;
+  animation: spin .8s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.commentary-regen {
+  margin-top: 16px; padding: 7px 16px;
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2);
+  color: white; border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: 'Inter', sans-serif; transition: background .15s;
+}
+.commentary-regen:hover { background: rgba(255,255,255,.2); }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
@@ -554,6 +591,7 @@ html{scroll-padding-top:108px}
   <a href="#sec-special">Erikois</a>
   <a href="#sec-submit">Lähetä</a>
   <a href="#sec-lb">🏆 Pisteet</a>
+  <a href="#sec-commentary">🎙 Selostus</a>
   <a href="#sec-stats">📊 Tilastot</a>
   <a href="#sec-players">Veikkaukset</a>
   <a href="#sec-admin" onclick="openAdminGate(event)" style="color:var(--t3);">⚙ Admin</a>
@@ -649,6 +687,18 @@ html{scroll-padding-top:108px}
       <span class="badge b-green" id="lb-badge">–</span>
     </div>
     <div id="lb-wrap"></div>
+  </section>
+
+  <!-- TURNAUSSELOSTUS -->
+  <section class="sec" id="sec-commentary">
+    <div class="sec-hdr">
+      <span class="sec-title">🎙 Turnausselostus</span>
+      <div class="sec-line"></div>
+      <span class="badge b-gold" id="commentary-badge">AI-generoitu</span>
+    </div>
+    <div id="commentary-wrap">
+      <div class="stat-empty">Selostus päivittyy kun admin tallentaa tuloksia.</div>
+    </div>
   </section>
 
   <!-- TILASTOT -->
@@ -820,6 +870,7 @@ async function fetchServerData() {
     }
     if (json.results?.groupResults) { adminData = json.results; saveAdmin(); }
     renderLB(); renderPlayers(); renderStats();
+    generateCommentary();
   } catch(e) {}
 }
 
@@ -845,6 +896,7 @@ async function saveResults() {
     if (!json.ok) { toast('❌ ' + (json.error||'Virhe')); return; }
     toast('✅ Tulokset tallennettu!');
     await fetchServerData();
+    generateCommentary();
   } catch(e) { toast('⚠ Ei yhteyttä'); }
 }
 // ══════════════════════════════════════════════════════
@@ -2070,6 +2122,102 @@ function renderH2H() {
         <span style="font-weight:700;font-size:13px;min-width:28px;text-align:right;color:${playerColor(ib)}">${b}</span>
       </div>`;
     }).join('')}`;
+}
+
+// ══════════════════════════════════════════════════════
+// TURNAUSSELOSTUS — Claude API
+// ══════════════════════════════════════════════════════
+
+async function generateCommentary(forceRegenerate = false) {
+  const wrap = document.getElementById('commentary-wrap');
+  if (!wrap) return;
+  if (!allPlayers.length) {
+    wrap.innerHTML = '<div class="stat-empty">Selostus päivittyy kun pelaajia ja tuloksia on syötetty.</div>';
+    return;
+  }
+
+  // Näytä latausanimaatio
+  wrap.innerHTML = `<div class="commentary-card">
+    <div class="commentary-loading">
+      <div class="commentary-spinner"></div>
+      Generoidaan selostusta...
+    </div>
+  </div>`;
+
+  // Rakenna datatiivistelmä Claude API:lle
+  const played = playedMatches();
+  const ranked = allPlayers.map(p => ({...p, pts: calcPts(p)}))
+    .sort((a,b) => b.pts.total - a.pts.total);
+
+  // Top veikkaukset (tarkat tulokset)
+  const bestPicks = [];
+  played.slice(-10).forEach(({g, i, m, r}) => {
+    allPlayers.forEach(p => {
+      const v = (norm(p).groupPreds[g]||{})[i];
+      if (v && v[0]===r[0] && v[1]===r[1]) {
+        bestPicks.push(`${p.name} arvasi oikein ${m[0]} ${r[0]}-${r[1]} ${m[1]}`);
+      }
+    });
+  });
+
+  // Ranking-muutos (yksinkertainen: vertaa ottelupisteet vs kokonais)
+  const rankChanges = ranked.map((p,i) => {
+    const matchOnly = allPlayers.map(x => ({name:x.name, pts:calcPts(x).match}))
+      .sort((a,b) => b.pts-a.pts);
+    const prevRank = matchOnly.findIndex(x => x.name === p.name) + 1;
+    return {name: p.name, rank: i+1, prevRank, total: p.pts.total, match: p.pts.match, ko: p.pts.ko, special: p.pts.special};
+  });
+
+  const lastMatches = played.slice(-5).map(({m,r}) =>
+    `${m[0]} ${r[0]}-${r[1]} ${m[1]}`).join(', ');
+
+  const prompt = `Olet hauska ja innostunut suomalainen urheiluselostaja. Kirjoita lyhyt, viihdyttävä turnausselostus FIFA World Cup 2026 veikkauskilpailusta kaveriporukalle nimeltä LAAJUSKI.
+
+TÄMÄNHETKINEN TILANNE:
+- Pelattu ${played.length}/72 lohkovaiheen ottelua
+- Pelaajia: ${ranked.length}
+
+PISTETILANNE:
+${rankChanges.map(p => `${p.rank}. ${p.name}: ${p.total} pts (ottelu ${p.match}, KO ${p.ko}, erikois ${p.special})`).join('\n')}
+
+VIIMEISIMMÄT OTTELUT:
+${lastMatches || 'Ei vielä otteluja'}
+
+TARKAT VEIKKAUKSET (viime kierroksilta):
+${bestPicks.slice(0,5).join('\n') || 'Ei tarkkoja osumia vielä'}
+
+Kirjoita 3-5 lauseen selostus joka:
+- Mainitsee johtajan nimeltä ja pisteet
+- Kommentoi nousijaa tai laskijaa jos sellainen on
+- Mainitsee jonkin hyvän veikkauksen nimeltä
+- On hauska ja kannustava, sopii kaveriporukalle
+- Kirjoita suomeksi, puhekielellä
+- ÄLÄ käytä **lihavoitua** tekstiä tai # otsikoita — pelkkää tekstiä`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || 'Selostuksen generointi epäonnistui.';
+    const now = new Date().toLocaleString('fi-FI', {day:'numeric',month:'numeric',hour:'2-digit',minute:'2-digit'});
+
+    wrap.innerHTML = `<div class="commentary-card">
+      <div class="commentary-updated">🕐 Päivitetty ${now} · ${played.length} ottelua pelattu</div>
+      <div class="commentary-text">${text.replace(/\n/g,'<br>')}</div>
+      <button class="commentary-regen" onclick="generateCommentary(true)">🔄 Generoi uudelleen</button>
+    </div>`;
+
+  } catch(e) {
+    wrap.innerHTML = `<div class="stat-empty">Selostuksen generointi epäonnistui: ${e.message}</div>`;
+  }
 }
 
 // ── INIT ─────────────────────────────────────────
